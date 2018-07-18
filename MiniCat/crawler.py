@@ -310,9 +310,22 @@ class TaskManager:
     granularity = 0.1
     lock = LOCK
 
+    last_download_time = time.time()
+    download_wait = 0
+
     def __init__(self, to_download_q: PriorityQueue, ):
         self.to_download_q = to_download_q
         self._exit = False
+
+    @staticmethod
+    def mark_download_time():
+        TaskManager.lock.acquire()
+        try:
+            TaskManager.last_download_time = time.time()
+        except:
+            traceback.print_exc()
+        finally:
+            TaskManager.lock.release()
 
     @staticmethod
     def register(tid):
@@ -334,10 +347,9 @@ class TaskManager:
         finally:
             TaskManager.lock.release()
 
-    @staticmethod
-    def is_empty():
+    def is_empty(self):
         TaskManager.lock.acquire()
-        is_empty = (len(TaskManager.registered_task) == 0)
+        is_empty = (len(TaskManager.registered_task) == 0 and self.to_download_q.empty())
         TaskManager.lock.release()
         if is_empty:
             TaskManager.ALLDONE = True
@@ -462,11 +474,16 @@ class Downloader(Thread):
     def request(self):
         response = None
 
+        if time.time() - TaskManager.last_download_time < TaskManager.download_wait:
+            time.sleep(TaskManager.download_wait/4)
+            return
+
         try:
             # 获取task
             task = self.to_download_q.get_nowait()
             # 在TaskManager里面注册
             TaskManager.register(task['tid'])
+
         except Empty:
             self.log.log_it("Scheduler to Downloader队列为空，{}等待中。".format(self.name), 'DEBUG')
             # 等待被Parser唤醒
@@ -477,6 +494,8 @@ class Downloader(Thread):
 
         self.log.log_it("请求 {}".format(task['url']), 'INFO')
         try:
+            # 记录下时间
+            TaskManager.mark_download_time()
             # 网络请求
             response = self.session.request(task['method'], task['url'], **task.get('meta', {}))
         except Exception as e:
@@ -498,6 +517,7 @@ class Downloader(Thread):
     def run(self):
         while not self._exit:
             self.request()
+        self.log.logd("Exit")
 
 
 class Parser(Thread):
@@ -577,6 +597,8 @@ class Parser(Thread):
             if task_with_parsed_data:
                 self.result_q.put(task_with_parsed_data)
 
+        self.log.logd("Exit")
+
 
 class Resulter(Thread):
     def __init__(
@@ -654,8 +676,9 @@ class Resulter(Thread):
             return
 
     def run(self):
-        while (not TaskManager.ALLDONE) or (not self.result_q.empty()):
+        while (not TaskManager.ALLDONE) or (not self.result_q.empty()) or (not self.to_download_q.empty()):
             self.result()
+        self.log.logd("Exit")
 
 
 class Crawler:
@@ -666,6 +689,7 @@ class Crawler:
                  parser_worker_count,
                  downloader_worker_count,
                  resulter_worker_count,
+                 speed=None,
                  session=requests.session()):
         self.parser_worker_count = int(parser_worker_count)
         self.downloader_worker_count = int(downloader_worker_count)
@@ -678,6 +702,9 @@ class Crawler:
         self.to_download_q = to_download_q
         self.downloader_parser_q = downloader_parser_q
         self.result_q = result_q
+
+        if speed is not None:
+            TaskManager.download_wait = 1 / speed
 
         self.task_manager = TaskManager(self.to_download_q)
         self.session = session

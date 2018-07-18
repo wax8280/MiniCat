@@ -10,12 +10,9 @@ from functools import partial
 
 class BaseLog(object):
     logger_dict = {}
-
-    def __init__(self, write_log: bool = False, log_path: str = './', log_level='INFO') -> None:
-
-        self.log_level = log_level
-        self.log_path = log_path
-        self.write_log = write_log
+    log_level = 'DEBUG'
+    write_log: bool = False
+    log_path: str = './'
 
     def log(self, logger_name: str, message: str, level: str) -> None:
         if level == 'INFO':
@@ -52,8 +49,8 @@ class BaseLog(object):
 
 
 class Log(BaseLog):
-    def __init__(self, logger_name: str, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, logger_name: str):
+        super().__init__()
 
         self.logger_name = logger_name
         self._logger_info = partial(BaseLog.log, self=self, logger_name=self.logger_name, level='INFO')
